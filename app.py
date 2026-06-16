@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 from credcheck_model import build_default_model, prepare, GROUPS, FIRM_TYPES
 
-st.set_page_config(page_title="CredCheck — Adaptive Trade-Credit Limits", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Adaptive Trade-Credit Limits", page_icon="📊", layout="wide")
 
 
 @st.cache_resource(show_spinner="Training the model (first load only)…")
@@ -56,8 +56,8 @@ def reason_codes(row, scored):
     return notes
 
 
-st.title("CredCheck — Adaptive Trade-Credit Limit Engine")
-st.caption("Anchor-led supply-chain credit. The risk estimate does **not** punish missing data — "
+st.title("Adaptive Trade-Credit Limit Engine")
+st.caption("The risk estimate does **not** punish missing data — "
            "absent evidence lowers *confidence* and sizes the limit conservatively instead.")
 
 tab_single, tab_batch, tab_about = st.tabs(["Score one firm", "Score a CSV", "How it works"])
