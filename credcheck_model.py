@@ -59,6 +59,11 @@ GST_PURCHASE_FRACTION = 0.40        # GST turnover -> implied purchasing scale f
 LGD = 0.60                          # loss given default, unsecured MSME credit (policy assumption)
 MAX_EXPECTED_LOSS = 0.15            # at LGD 0.60 this declines PD above 25% (risk grade D)
 
+# Availability gate: an expert votes only if at least this share of its fields is present.
+# Votes are already weighted by coverage, so this only guards against votes on a sliver of
+# inputs. validation.py sweeps 0-100%: results are identical from 0% to 30%.
+GATE = 0.30
+
 
 # ---------------------------------------------------------------------------
 # 1. Synthetic data generator
@@ -147,8 +152,9 @@ def make_expert(kind="hgb"):
 
 
 class CredCheckModel:
-    def __init__(self, expert="hgb"):
+    def __init__(self, expert="hgb", gate=GATE):
         self.expert_kind = expert
+        self.gate = gate
         self.experts, self.reliability, self.iso, self.prior_pd, self.max_w = {}, {}, None, 0.15, 1.0
 
     def fit(self, train, cal):
@@ -169,7 +175,7 @@ class CredCheckModel:
         n = len(df); num = np.zeros(n); den = np.zeros(n); cov_w = np.zeros(n)
         for g, cols in GROUPS.items():
             cov = _coverage(df, cols)
-            w = np.where(cov >= 0.30, cov * self.reliability[g], 0.0)   # availability gate
+            w = np.where(cov >= self.gate, cov * self.reliability[g], 0.0)   # availability gate
             pd_g = self.experts[g].predict_proba(df[cols])[:, 1]
             num += w * pd_g; den += w; cov_w += w
         raw = np.where(den > 0, num / np.maximum(den, 1e-9), self.prior_pd)

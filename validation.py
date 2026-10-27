@@ -5,9 +5,12 @@ CredCheck validation report.
 2. Benchmark against standard models.   Same 60/20/20 split, same calibration, same test set.
 3. Decline rule and thin-file limit cut. How many firms are declined, and how much of a limit
                                         cut comes from missing data alone.
+4. Gate threshold sweep.                How results change as the 30% availability gate moves
+                                        from 0% to 100%, on clean and on patchy data.
 
 Run:  python validation.py      -> prints the report and writes VALIDATION.md
 """
+import copy
 import math
 
 import numpy as np
@@ -18,7 +21,7 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss, roc_auc_score
 from sklearn.pipeline import make_pipeline
 
-from credcheck_model import (ALL_FEATURES, GROUPS, LGD, MAX_EXPECTED_LOSS, SEED,
+from credcheck_model import (ALL_FEATURES, GATE, GROUPS, LGD, MAX_EXPECTED_LOSS, SEED,
                              CredCheckModel, make_dataset, make_expert, prepare, split_data)
 
 SOURCES = ["trade", "gst", "bank", "bureau", "fin"]
@@ -137,6 +140,40 @@ def policy_summary(train, cal, test):
     return decl, int(thin.sum()), cut, total_cut
 
 
+def patchy(df, share=0.25, seed=SEED):
+    """Blank a random share of individual fields, to mimic messy real-world uploads."""
+    df = df.copy()
+    cols = [c for c in ALL_FEATURES if c != "firm_type_code"]
+    vals = df[cols].to_numpy(dtype=float).copy()
+    vals[np.random.default_rng(seed).random(vals.shape) < share] = np.nan
+    df[cols] = vals
+    return df
+
+
+def gate_sweep(train, cal, test):
+    """Re-run the blend at gate thresholds from 0% to 100%. Experts are trained once
+    (they don't depend on the gate); calibration is refit for each threshold."""
+    base = CredCheckModel().fit(train, cal)
+    test_patchy = patchy(test)
+    rows = []
+    for gate in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]:
+        m = copy.copy(base)
+        m.gate = gate
+        cal_raw, _ = m._raw_and_conf(cal)
+        m.iso = IsotonicRegression(out_of_bounds="clip").fit(cal_raw, cal["default"])
+        actual, full = m.score(test), m.score(test, assume_full_data=True)
+        approved = actual["decision"] == "approve"
+        thin = approved & (actual["confidence"] < THIN_FILE_CONFIDENCE)
+        cut = (1 - actual.loc[thin, "recommended_limit"] / full.loc[thin, "recommended_limit"]).mean()
+        rows.append([f"{gate:.0%}" + (" (current)" if gate == GATE else ""),
+                     f"{roc_auc_score(cal['default'], m.iso.predict(cal_raw)):.3f}",
+                     f"{roc_auc_score(test['default'], m.predict(test)[0]):.3f}",
+                     f"{roc_auc_score(test['default'], m.predict(test_patchy)[0]):.3f}",
+                     f"{approved.mean():.0%}", f"{cut:.0%}"])
+    return pd.DataFrame(rows, columns=["Gate threshold", "Calibration AUC", "Test AUC",
+                                       "Test AUC, patchy data", "Approved", "Thin-file cut"])
+
+
 def main():
     data = prepare(make_dataset())
     train, cal, test = split_data(data)
@@ -144,6 +181,7 @@ def main():
     miss_table, auc_base, auc_flags, auc_only = missingness_test(data, train, cal, test)
     bench = benchmark(train, cal, test)
     decl, n_thin, cut, total_cut = policy_summary(train, cal, test)
+    sweep = gate_sweep(train, cal, test)
 
     report = f"""# CredCheck validation report
 
@@ -192,6 +230,20 @@ data never causes a decline by itself.
 ({n_thin} test firms), limits are on average **{cut.mean():.0%}** lower than the same firms would
 get with complete data (range {cut.min():.0%} to {cut.max():.0%}; {total_cut:.0%} of total limit
 value). The cut comes from missing data alone; the PD and the decision are unchanged.
+
+## 4. Gate threshold sweep
+
+An expert votes only if at least {GATE:.0%} of its fields are present. That value was set by
+judgment, so this re-runs the model at every threshold from 0% to 100%. "Patchy data" blanks
+25% of individual fields at random on the test set, to mimic messy real uploads.
+
+{md_table(sweep)}
+
+**Reading it:** every threshold from 0% to 30% gives the same result, because each vote is
+already weighted by coverage; the gate only guards against an expert voting on a sliver of
+its inputs. Above about 50%, useful partial evidence is thrown away and accuracy falls,
+sharply on patchy data. {GATE:.0%} sits inside the flat range. On a lender's real data,
+rerun this sweep on the calibration set and keep a value from the flat region.
 """
     with open("VALIDATION.md", "w") as f:
         f.write(report)

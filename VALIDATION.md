@@ -62,3 +62,29 @@ data never causes a decline by itself.
 (33 test firms), limits are on average **13%** lower than the same firms would
 get with complete data (range 10% to 20%; 13% of total limit
 value). The cut comes from missing data alone; the PD and the decision are unchanged.
+
+## 4. Gate threshold sweep
+
+An expert votes only if at least 30% of its fields are present. That value was set by
+judgment, so this re-runs the model at every threshold from 0% to 100%. "Patchy data" blanks
+25% of individual fields at random on the test set, to mimic messy real uploads.
+
+| Gate threshold | Calibration AUC | Test AUC | Test AUC, patchy data | Approved | Thin-file cut |
+| --- | --- | --- | --- | --- | --- |
+| 0% | 0.782 | 0.779 | 0.754 | 79% | 13% |
+| 10% | 0.782 | 0.779 | 0.754 | 79% | 13% |
+| 20% | 0.782 | 0.779 | 0.754 | 79% | 13% |
+| 30% (current) | 0.782 | 0.779 | 0.754 | 79% | 13% |
+| 40% | 0.782 | 0.779 | 0.753 | 79% | 14% |
+| 50% | 0.782 | 0.779 | 0.754 | 79% | 16% |
+| 60% | 0.782 | 0.779 | 0.739 | 80% | 14% |
+| 70% | 0.779 | 0.776 | 0.716 | 75% | 13% |
+| 80% | 0.778 | 0.772 | 0.708 | 75% | 13% |
+| 90% | 0.773 | 0.767 | 0.701 | 75% | 13% |
+| 100% | 0.773 | 0.767 | 0.697 | 75% | 13% |
+
+**Reading it:** every threshold from 0% to 30% gives the same result, because each vote is
+already weighted by coverage; the gate only guards against an expert voting on a sliver of
+its inputs. Above about 50%, useful partial evidence is thrown away and accuracy falls,
+sharply on patchy data. 30% sits inside the flat range. On a lender's real data,
+rerun this sweep on the calibration set and keep a value from the flat region.
