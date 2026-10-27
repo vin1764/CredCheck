@@ -15,9 +15,13 @@ import sys
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.impute import SimpleImputer
 from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 SEED = 7
 FIRM_TYPES = ["proprietorship", "partnership", "small_pvt", "large_pvt"]
@@ -48,6 +52,12 @@ BUFFER = 1.10
 CONCENTRATION_CAP = 8_000_000
 FLOOR = 25_000
 GST_PURCHASE_FRACTION = 0.40        # GST turnover -> implied purchasing scale for sizing
+
+# Decline policy: approve only if the expected-loss rate (PD x LGD) is within tolerance.
+# It uses the calibrated PD, never the confidence-inflated one, so missing data can
+# shrink a limit but can never by itself cause a decline.
+LGD = 0.60                          # loss given default, unsecured MSME credit (policy assumption)
+MAX_EXPECTED_LOSS = 0.15            # at LGD 0.60 this declines PD above 25% (risk grade D)
 
 
 # ---------------------------------------------------------------------------
@@ -125,15 +135,26 @@ def _coverage(df, cols):
     return 1.0 - df[cols].isna().mean(axis=1).values
 
 
+def make_expert(kind="hgb"):
+    """One expert model. 'hgb' = gradient boosting (default); 'logreg' = logistic regression."""
+    if kind == "hgb":
+        return HistGradientBoostingClassifier(max_depth=4, learning_rate=0.05, max_iter=400,
+                                              l2_regularization=1.0, random_state=SEED)
+    if kind == "logreg":
+        return make_pipeline(SimpleImputer(strategy="median", keep_empty_features=True),
+                             StandardScaler(), LogisticRegression(max_iter=2000))
+    raise ValueError(f"unknown expert kind: {kind}")
+
+
 class CredCheckModel:
-    def __init__(self):
+    def __init__(self, expert="hgb"):
+        self.expert_kind = expert
         self.experts, self.reliability, self.iso, self.prior_pd, self.max_w = {}, {}, None, 0.15, 1.0
 
     def fit(self, train, cal):
         self.prior_pd = float(train["default"].mean())
         for g, cols in GROUPS.items():
-            clf = HistGradientBoostingClassifier(max_depth=4, learning_rate=0.05, max_iter=400,
-                                                 l2_regularization=1.0, random_state=SEED)
+            clf = make_expert(self.expert_kind)
             clf.fit(train[cols], train["default"])
             self.experts[g] = clf
             auc = roc_auc_score(cal["default"], clf.predict_proba(cal[cols])[:, 1])
@@ -159,9 +180,15 @@ class CredCheckModel:
         raw, conf = self._raw_and_conf(df)
         return self.iso.predict(raw), conf
 
-    def score(self, df):
-        """Return PD, confidence, conservative PD, and recommended limit per firm."""
+    def score(self, df, assume_full_data=False):
+        """Return PD, confidence, conservative PD, expected loss, decision and limit per firm.
+
+        assume_full_data=True scores the same firms as if confidence were 100%,
+        which isolates how much of a limit cut comes from missing data alone.
+        """
         pd_hat, conf = self.predict(df)
+        if assume_full_data:
+            conf = np.ones_like(conf)
         # Capacity sized from the stronger of anchor orders or GST-implied purchasing scale.
         trade_rr = df["trade_order_vol_monthly"]
         gst_rr = df["gst_turnover_monthly"] * GST_PURCHASE_FRACTION
@@ -174,17 +201,29 @@ class CredCheckModel:
         afford = np.maximum(bal * 6.0, run_rate * 0.5)
         limit = np.clip(capacity * risk_mult * (0.7 + 0.3 * conf), FLOOR,
                         np.minimum(afford, CONCENTRATION_CAP))
+        # Decline rule: on the calibrated PD only, so thin data alone never declines a firm.
+        el_rate = pd_hat * LGD
+        approve = el_rate <= MAX_EXPECTED_LOSS
+        limit = np.where(approve, limit, 0.0)
         return pd.DataFrame({
             "pd": pd_hat.round(4), "confidence": conf.round(3),
-            "pd_conservative": pd_cons.round(4), "recommended_limit": np.round(limit, -2),
+            "pd_conservative": pd_cons.round(4), "expected_loss_rate": el_rate.round(4),
+            "decision": np.where(approve, "approve", "decline"),
+            "recommended_limit": np.round(limit, -2),
         }, index=df.index)
 
 
-def build_default_model(n=12000, seed=SEED):
-    data = prepare(make_dataset(n=n, seed=seed))
+def split_data(data, seed=SEED):
+    """60/20/20 stratified split into train, calibration and test sets."""
     train, tmp = train_test_split(data, test_size=0.40, random_state=seed, stratify=data["default"])
-    cal, _ = train_test_split(tmp, test_size=0.50, random_state=seed, stratify=tmp["default"])
-    return CredCheckModel().fit(train, cal), data
+    cal, test = train_test_split(tmp, test_size=0.50, random_state=seed, stratify=tmp["default"])
+    return train, cal, test
+
+
+def build_default_model(n=12000, seed=SEED, expert="hgb"):
+    data = prepare(make_dataset(n=n, seed=seed))
+    train, cal, _ = split_data(data, seed)
+    return CredCheckModel(expert=expert).fit(train, cal), data
 
 
 if __name__ == "__main__":
@@ -199,7 +238,9 @@ if __name__ == "__main__":
     out_path = path.rsplit(".", 1)[0] + "_scored.csv"
     result.to_csv(out_path, index=False)
     print(f"Scored {len(scored)} firms -> {out_path}")
+    approved = scored["decision"] == "approve"
     print(f"  median PD={scored['pd'].median():.3f}  median confidence={scored['confidence'].median():.3f}"
-          f"  median limit=Rs{scored['recommended_limit'].median():,.0f}")
+          f"  approved={approved.mean():.0%}"
+          f"  median approved limit=Rs{scored.loc[approved, 'recommended_limit'].median():,.0f}")
     if "default" in raw_df.columns and raw_df["default"].nunique() > 1:
         print(f"  AUC on this file = {roc_auc_score(raw_df['default'], scored['pd']):.3f}")

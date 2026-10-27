@@ -7,7 +7,7 @@ Deploy:       push app.py + credcheck_model.py + requirements.txt to GitHub,
 import numpy as np
 import pandas as pd
 import streamlit as st
-from credcheck_model import build_default_model, prepare, GROUPS, FIRM_TYPES
+from credcheck_model import build_default_model, prepare, GROUPS, FIRM_TYPES, LGD, MAX_EXPECTED_LOSS
 
 st.set_page_config(page_title="Adaptive Trade-Credit Limits", page_icon="📊", layout="wide")
 
@@ -34,8 +34,12 @@ def reason_codes(row, scored):
     active = [g for g in GROUPS if g not in ("all", "firmo")
               and (1 - row[GROUPS[g]].isna().mean(axis=1).iloc[0]) >= 0.30]
     gated = [GROUP_LABEL[g] for g in TOGGLE_GROUPS if g not in active]
-    notes = [f"✅ Scored using {len(active)} evidence source(s): "
-             + ", ".join(GROUP_LABEL[g] for g in active)]
+    notes = []
+    if scored["decision"].iloc[0] == "decline":
+        notes.append(f"⛔ **Declined:** expected loss (PD × LGD {LGD:.0%}) is above the "
+                     f"{MAX_EXPECTED_LOSS:.0%} policy limit. Declines depend on risk only, never on missing data.")
+    notes.append(f"✅ Scored using {len(active)} evidence source(s): "
+                 + ", ".join(GROUP_LABEL[g] for g in active))
     if gated:
         notes.append("⚪ No data (expert switched off, **not** penalised): " + ", ".join(gated))
     if scored["confidence"].iloc[0] < 0.70:
@@ -112,7 +116,8 @@ with tab_single:
 
     st.markdown("---")
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Recommended limit", f"₹{limit:,.0f}")
+    declined = scored["decision"].iloc[0] == "decline"
+    m1.metric("Recommended limit", "Declined" if declined else f"₹{limit:,.0f}")
     m2.metric("Probability of default", f"{pd_val*100:.1f}%")
     m3.metric("Confidence", f"{conf*100:.0f}%")
     m4.metric("Risk grade", risk_grade(pd_val))
@@ -132,10 +137,13 @@ with tab_batch:
         result = pd.concat([raw.reset_index(drop=True), out.reset_index(drop=True)], axis=1)
         result = result.loc[:, ~result.columns.duplicated()]
         st.dataframe(result, use_container_width=True, height=380)
-        a, b, c = st.columns(3)
+        approved = out["decision"] == "approve"
+        a, b, c, d = st.columns(4)
         a.metric("Firms scored", len(out))
-        b.metric("Median limit", f"₹{out['recommended_limit'].median():,.0f}")
-        c.metric("Median confidence", f"{out['confidence'].median()*100:.0f}%")
+        b.metric("Approved", f"{approved.mean()*100:.0f}%")
+        c.metric("Median approved limit",
+                 f"₹{out.loc[approved, 'recommended_limit'].median():,.0f}" if approved.any() else "—")
+        d.metric("Median confidence", f"{out['confidence'].median()*100:.0f}%")
         st.download_button("Download scored CSV", result.to_csv(index=False), "scored.csv", "text/csv")
 
 # -------------------------------------------------- ABOUT
@@ -151,6 +159,14 @@ calibrated to a real probability, and paired with a *confidence* that falls as d
 The limit engine then sizes a transparent line: `capacity × risk_multiplier × confidence`,
 capped by affordability and concentration limits.
 
-**Try it:** in *Score one firm*, switch off *Financial statements* and *Credit bureau* — the
-probability of default barely moves, but confidence drops and the limit becomes more cautious.
-""")
+**Decline rule.** A firm is declined when its expected-loss rate (calibrated PD × LGD of
+{LGD:.0%}) exceeds {MAX_EXPECTED_LOSS:.0%}. The rule uses the calibrated PD only, so missing data
+can shrink a limit but can never by itself cause a decline.
+
+**Try it:** in *Score one firm*, switch off *Financial statements* and *Credit bureau*. The PD
+is now based only on the evidence still present (a missing source is dropped, never penalised),
+confidence drops, and the limit becomes more cautious.
+
+**Validation.** `python validation.py` tests whether missing data predicts default and
+benchmarks the model against standard alternatives; results are in `VALIDATION.md`.
+""".format(LGD=LGD, MAX_EXPECTED_LOSS=MAX_EXPECTED_LOSS))
