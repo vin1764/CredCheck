@@ -165,7 +165,11 @@ class CredCheckModel:
             clf = make_expert(self.expert_kind)
             clf.fit(train[cols], train["default"])
             self.experts[g] = clf
-            auc = roc_auc_score(cal["default"], clf.predict_proba(cal[cols])[:, 1])
+            # Reliability is measured only on calibration firms that have this source's data.
+            # Blank firms are already given zero weight by coverage in the blend, so scoring
+            # them here too would penalise sparse sources twice.
+            has = cal[cols].notna().any(axis=1)
+            auc = roc_auc_score(cal["default"][has], clf.predict_proba(cal.loc[has, cols])[:, 1])
             self.reliability[g] = max(0.0, (auc - 0.5) * 2)
         self.reliability["all"] *= 0.6
         self.max_w = sum(self.reliability.values())
