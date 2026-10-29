@@ -49,9 +49,10 @@ data usually has thresholds and interactions that the simulation does not.
 
 ## 3. Decline rule and the thin-file limit cut
 
-A firm is declined when its calibrated PD × LGD (60%) exceeds 15%,
-i.e. a PD above 25%. The rule uses the calibrated PD only, so missing
-data never causes a decline by itself.
+A firm is declined when its expected loss (calibrated PD × LGD of 60%) is larger than the
+expected margin on the sale ((1 − PD) × 20%), i.e. a PD above 25%, the
+break-even point. The rule uses the calibrated PD only, so missing data never causes a decline
+by itself.
 
 | Decision | Share of test firms | Actual default rate |
 | --- | --- | --- |

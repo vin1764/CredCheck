@@ -7,7 +7,7 @@ Deploy:       push app.py + credcheck_model.py + requirements.txt to GitHub,
 import numpy as np
 import pandas as pd
 import streamlit as st
-from credcheck_model import build_default_model, prepare, GROUPS, FIRM_TYPES, LGD, MAX_EXPECTED_LOSS
+from credcheck_model import build_default_model, prepare, GROUPS, FIRM_TYPES, LGD, MARGIN, BREAK_EVEN_PD
 
 st.set_page_config(page_title="Adaptive Trade-Credit Limits", page_icon="📊", layout="wide")
 
@@ -36,8 +36,9 @@ def reason_codes(row, scored):
     gated = [GROUP_LABEL[g] for g in TOGGLE_GROUPS if g not in active]
     notes = []
     if scored["decision"].iloc[0] == "decline":
-        notes.append(f"⛔ **Declined:** expected loss (PD × LGD {LGD:.0%}) is above the "
-                     f"{MAX_EXPECTED_LOSS:.0%} policy limit. Declines depend on risk only, never on missing data.")
+        notes.append(f"⛔ **Declined:** expected loss (PD × LGD {LGD:.0%}) is larger than the expected "
+                     f"margin on the sale ({MARGIN:.0%} margin), i.e. PD above {BREAK_EVEN_PD:.0%}. "
+                     f"Declines depend on risk only, never on missing data.")
     notes.append(f"✅ Scored using {len(active)} evidence source(s): "
                  + ", ".join(GROUP_LABEL[g] for g in active))
     if gated:
@@ -159,9 +160,11 @@ calibrated to a real probability, and paired with a *confidence* that falls as d
 The limit engine then sizes a transparent line: `capacity × risk_multiplier × confidence`,
 capped by affordability and concentration limits.
 
-**Decline rule.** A firm is declined when its expected-loss rate (calibrated PD × LGD of
-{LGD:.0%}) exceeds {MAX_EXPECTED_LOSS:.0%}. The rule uses the calibrated PD only, so missing data
-can shrink a limit but can never by itself cause a decline.
+**Decline rule (break-even).** A firm is declined when its expected loss (calibrated PD × LGD of
+{LGD:.0%}) is larger than the expected margin on the sale ((1 − PD) × {MARGIN:.0%} margin), i.e. a PD
+above {BREAK_EVEN_PD:.0%}. Set the margin per supplier: thinner margins mean a stricter cutoff.
+The rule uses the calibrated PD only, so missing data can shrink a limit but can never by itself
+cause a decline.
 
 **Try it:** in *Score one firm*, switch off *Financial statements* and *Credit bureau*. The PD
 is now based only on the evidence still present (a missing source is dropped, never penalised),
@@ -169,4 +172,4 @@ confidence drops, and the limit becomes more cautious.
 
 **Validation.** `python validation.py` tests whether missing data predicts default and
 benchmarks the model against standard alternatives; results are in `VALIDATION.md`.
-""".format(LGD=LGD, MAX_EXPECTED_LOSS=MAX_EXPECTED_LOSS))
+""".format(LGD=LGD, MARGIN=MARGIN, BREAK_EVEN_PD=BREAK_EVEN_PD))

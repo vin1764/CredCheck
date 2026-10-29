@@ -53,11 +53,13 @@ CONCENTRATION_CAP = 8_000_000
 FLOOR = 25_000
 GST_PURCHASE_FRACTION = 0.40        # GST turnover -> implied purchasing scale for sizing
 
-# Decline policy: approve only if the expected-loss rate (PD x LGD) is within tolerance.
+# Decline policy (break-even): approve only if the expected margin on the sale covers the
+# expected loss, i.e. (1 - PD) x MARGIN >= PD x LGD, which means PD <= MARGIN / (MARGIN + LGD).
 # It uses the calibrated PD, never the confidence-inflated one, so missing data can
 # shrink a limit but can never by itself cause a decline.
 LGD = 0.60                          # loss given default, unsecured MSME credit (policy assumption)
-MAX_EXPECTED_LOSS = 0.15            # at LGD 0.60 this declines PD above 25% (risk grade D)
+MARGIN = 0.20                       # supplier's margin on a credit sale; set per supplier
+BREAK_EVEN_PD = MARGIN / (MARGIN + LGD)   # 25% at these values: decline above it
 
 # Availability gate: an expert votes only if at least this share of its fields is present.
 # Votes are already weighted by coverage, so this only guards against votes on a sliver of
@@ -187,7 +189,7 @@ class CredCheckModel:
         return self.iso.predict(raw), conf
 
     def score(self, df, assume_full_data=False):
-        """Return PD, confidence, conservative PD, expected loss, decision and limit per firm.
+        """Return PD, confidence, conservative PD, expected loss and margin, decision and limit per firm.
 
         assume_full_data=True scores the same firms as if confidence were 100%,
         which isolates how much of a limit cut comes from missing data alone.
@@ -207,13 +209,16 @@ class CredCheckModel:
         afford = np.maximum(bal * 6.0, run_rate * 0.5)
         limit = np.clip(capacity * risk_mult * (0.7 + 0.3 * conf), FLOOR,
                         np.minimum(afford, CONCENTRATION_CAP))
-        # Decline rule: on the calibrated PD only, so thin data alone never declines a firm.
+        # Decline rule (break-even): expected margin must cover expected loss. Uses the
+        # calibrated PD only, so thin data alone never declines a firm.
         el_rate = pd_hat * LGD
-        approve = el_rate <= MAX_EXPECTED_LOSS
+        margin_rate = (1 - pd_hat) * MARGIN
+        approve = margin_rate >= el_rate
         limit = np.where(approve, limit, 0.0)
         return pd.DataFrame({
             "pd": pd_hat.round(4), "confidence": conf.round(3),
             "pd_conservative": pd_cons.round(4), "expected_loss_rate": el_rate.round(4),
+            "expected_margin_rate": margin_rate.round(4),
             "decision": np.where(approve, "approve", "decline"),
             "recommended_limit": np.round(limit, -2),
         }, index=df.index)
