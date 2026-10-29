@@ -21,7 +21,7 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss, roc_auc_score
 from sklearn.pipeline import make_pipeline
 
-from credcheck_model import (ALL_FEATURES, GATE, GROUPS, LGD, MAX_EXPECTED_LOSS, SEED,
+from credcheck_model import (ALL_FEATURES, BREAK_EVEN_PD, GATE, GROUPS, LGD, MARGIN, SEED,
                              CredCheckModel, make_dataset, make_expert, prepare, split_data)
 
 SOURCES = ["trade", "gst", "bank", "bureau", "fin"]
@@ -220,9 +220,10 @@ data usually has thresholds and interactions that the simulation does not.
 
 ## 3. Decline rule and the thin-file limit cut
 
-A firm is declined when its calibrated PD × LGD ({LGD:.0%}) exceeds {MAX_EXPECTED_LOSS:.0%},
-i.e. a PD above {MAX_EXPECTED_LOSS / LGD:.0%}. The rule uses the calibrated PD only, so missing
-data never causes a decline by itself.
+A firm is declined when its expected loss (calibrated PD × LGD of {LGD:.0%}) is larger than the
+expected margin on the sale ((1 − PD) × {MARGIN:.0%}), i.e. a PD above {BREAK_EVEN_PD:.0%}, the
+break-even point. The rule uses the calibrated PD only, so missing data never causes a decline
+by itself.
 
 {md_table(decl)}
 
