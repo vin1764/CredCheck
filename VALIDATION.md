@@ -36,10 +36,10 @@ same 2,400 firms, and scored on the same 2,400 test firms.
 | True PD (best possible on this data) | 0.858 | 0.100 |
 | Logistic regression + missing flags | 0.810 | 0.116 |
 | Logistic regression (median fill) | 0.810 | 0.116 |
-| CredCheck, logistic-regression experts | 0.804 | 0.117 |
+| CredCheck, logistic-regression experts | 0.803 | 0.118 |
 | Random forest, 500 trees (median fill) | 0.797 | 0.122 |
 | HistGBM, one model on all 13 features | 0.780 | 0.125 |
-| CredCheck, HistGBM experts (default) | 0.779 | 0.125 |
+| CredCheck, HistGBM experts (default) | 0.777 | 0.126 |
 
 **Reading it:** logistic regression scores highest because the simulated risk is linear
 (each feature is a hidden driver plus noise), which is exactly what logistic regression
@@ -56,12 +56,12 @@ by itself.
 
 | Decision | Share of test firms | Actual default rate |
 | --- | --- | --- |
-| Approved | 79% | 11.4% |
-| Declined | 21% | 44.8% |
+| Approved | 79% | 11.3% |
+| Declined | 21% | 44.1% |
 
 **Thin-file limit cut.** Among approved firms with confidence below 70%
-(33 test firms), limits are on average **13%** lower than the same firms would
-get with complete data (range 10% to 20%; 13% of total limit
+(80 test firms), limits are on average **12%** lower than the same firms would
+get with complete data (range 0% to 21%; 12% of total limit
 value). The cut comes from missing data alone; the PD and the decision are unchanged.
 
 ## 4. Gate threshold sweep
@@ -72,17 +72,17 @@ judgment, so this re-runs the model at every threshold from 0% to 100%. "Patchy 
 
 | Gate threshold | Calibration AUC | Test AUC | Test AUC, patchy data | Approved | Thin-file cut |
 | --- | --- | --- | --- | --- | --- |
-| 0% | 0.782 | 0.779 | 0.754 | 79% | 13% |
-| 10% | 0.782 | 0.779 | 0.754 | 79% | 13% |
-| 20% | 0.782 | 0.779 | 0.754 | 79% | 13% |
-| 30% (current) | 0.782 | 0.779 | 0.754 | 79% | 13% |
-| 40% | 0.782 | 0.779 | 0.753 | 79% | 14% |
-| 50% | 0.782 | 0.779 | 0.754 | 79% | 16% |
-| 60% | 0.782 | 0.779 | 0.739 | 80% | 14% |
-| 70% | 0.779 | 0.776 | 0.716 | 75% | 13% |
-| 80% | 0.778 | 0.772 | 0.708 | 75% | 13% |
-| 90% | 0.773 | 0.767 | 0.701 | 75% | 13% |
-| 100% | 0.773 | 0.767 | 0.697 | 75% | 13% |
+| 0% | 0.782 | 0.777 | 0.757 | 79% | 12% |
+| 10% | 0.782 | 0.777 | 0.757 | 79% | 12% |
+| 20% | 0.782 | 0.777 | 0.757 | 79% | 12% |
+| 30% (current) | 0.782 | 0.777 | 0.757 | 79% | 12% |
+| 40% | 0.783 | 0.777 | 0.754 | 79% | 12% |
+| 50% | 0.783 | 0.775 | 0.753 | 79% | 13% |
+| 60% | 0.783 | 0.778 | 0.739 | 79% | 15% |
+| 70% | 0.779 | 0.774 | 0.718 | 79% | 12% |
+| 80% | 0.778 | 0.775 | 0.713 | 79% | 12% |
+| 90% | 0.772 | 0.768 | 0.702 | 74% | 12% |
+| 100% | 0.772 | 0.768 | 0.698 | 74% | 12% |
 
 **Reading it:** every threshold from 0% to 30% gives the same result, because each vote is
 already weighted by coverage; the gate only guards against an expert voting on a sliver of
