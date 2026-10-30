@@ -32,6 +32,8 @@ MISSING_P = {                       # P(an entire group is unobserved) by firm t
     "small_pvt":      (0.20, 0.06, 0.04),
     "large_pvt":      (0.03, 0.02, 0.01),
 }
+# Partly filled sources: P(bureau report has no score yet | report exists), new to credit
+NO_SCORE_P = {"proprietorship": 0.25, "partnership": 0.15, "small_pvt": 0.05, "large_pvt": 0.02}
 
 # ---- Six evidence groups -> one expert each. "all" is a NaN-native generalist. ----
 GROUPS = {
@@ -63,7 +65,7 @@ BREAK_EVEN_PD = MARGIN / (MARGIN + LGD)   # 25% at these values: decline above i
 
 # Availability gate: an expert votes only if at least this share of its fields is present.
 # Votes are already weighted by coverage, so this only guards against votes on a sliver of
-# inputs. validation.py sweeps 0-100%: results are identical from 0% to 30%.
+# inputs. validation.py sweeps 0-100%: results barely change from 0% to 30%.
 GATE = 0.30
 
 
@@ -78,9 +80,14 @@ def make_dataset(n=12000, seed=SEED):
     # True hidden risk drivers (higher = safer, except leverage where higher = worse)
     z_pay = rng.normal(0, 1, n); z_cash = rng.normal(0, 1, n); z_lev = rng.normal(0, 1, n)
     z_bur = rng.normal(0, 1, n); z_grw = rng.normal(0, 1, n)
+    # Worst days past due in the last 12 months (exists even when the lender can't see it)
+    dpd = np.clip((30 * np.maximum(0, -z_bur) + 8 * rng.normal(0, 1, n)).round(0), 0, 180)
     latent = (-0.90 * z_pay - 0.80 * z_cash + 0.90 * z_lev
-              - 0.90 * z_bur - 0.60 * z_grw + 0.30 * rng.normal(0, 1, n))
-    pd_true = 1 / (1 + np.exp(-(latent - 2.3)))
+              - 0.90 * z_bur - 0.60 * z_grw + 0.30 * rng.normal(0, 1, n)
+              + 0.70 * (dpd >= 30)                                     # 30+ days late: jump
+              + 0.50 * np.maximum(0, z_lev) * np.maximum(0, -z_pay)    # debt hurts late payers more
+              + 0.50 * (vintage < 2))                                   # young firms riskier
+    pd_true = 1 / (1 + np.exp(-(latent - 2.75)))                        # shift sets ~18% default
     default = (rng.random(n) < pd_true).astype(int)
 
     base_vol = np.exp(rng.normal(12.6, 1.0, n))            # monthly order value, INR
@@ -97,7 +104,7 @@ def make_dataset(n=12000, seed=SEED):
     df["bank_bounce_rate"] = np.clip(0.035 - 0.02 * z_cash - 0.01 * z_pay + 0.015 * rng.normal(0, 1, n), 0, 0.5).round(3)
     # Credit bureau
     df["bureau_score"] = np.clip(720 + 75 * z_bur + 25 * rng.normal(0, 1, n), 300, 900).round(0)
-    df["bureau_dpd_max_12m"] = np.clip((30 * np.maximum(0, -z_bur) + 8 * rng.normal(0, 1, n)).round(0), 0, 180)
+    df["bureau_dpd_max_12m"] = dpd
     # Financial statements (leverage + liquidity)
     df["fin_debt_to_equity"] = np.clip(1.0 + 0.80 * z_lev + 0.15 * rng.normal(0, 1, n), 0.05, 8).round(3)
     df["fin_current_ratio"] = np.clip(1.6 - 0.45 * z_lev + 0.12 * rng.normal(0, 1, n), 0.2, 5).round(3)
@@ -111,6 +118,14 @@ def make_dataset(n=12000, seed=SEED):
         for grp, p in [(GROUPS["fin"], p_fin), (GROUPS["bureau"], p_bur), (GROUPS["gst"], p_gst)]:
             df.loc[m & (rng.random(n) < p), grp] = np.nan
     df.loc[rng.random(n) < 0.09, GROUPS["trade"]] = np.nan
+
+    # Partly filled sources (only where the source exists at all)
+    no_score = np.array([NO_SCORE_P[t] for t in df["firm_type"]])
+    df.loc[df["bureau_dpd_max_12m"].notna() & (rng.random(n) < no_score), "bureau_score"] = np.nan
+    df.loc[df["gst_turnover_monthly"].notna() & (rng.random(n) < 0.08), "gst_turnover_trend"] = np.nan
+    df.loc[df["trade_order_vol_monthly"].notna() & (rng.random(n) < 0.08),
+           ["trade_ontime_ratio", "trade_days_to_pay_vs_terms"]] = np.nan
+    df.loc[rng.random(n) < 0.10, "bank_bounce_rate"] = np.nan
 
     df["default"] = default
     df["pd_true"] = pd_true.round(4)
